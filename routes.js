@@ -15,4 +15,5 @@ exports.routes = {
 	"import_crontab": "/import_crontab", // this is from existing crontab
 	"logger": "/logger",
 	"stdout": "/stdout",
+	"remove_stale": "/remove_stale",
 };

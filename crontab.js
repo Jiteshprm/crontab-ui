@@ -11,6 +11,7 @@ if(process.env.CRON_PATH !== undefined) {
 }
 
 db.loadDatabase(function (err) {
+	console.log("Loading DB...")
 	if (err) throw err; // no hope, just terminate
 });
 
@@ -21,8 +22,9 @@ var cron_parser = require("cron-parser");
 exports.log_folder = __dirname + '/crontabs/logs';
 exports.env_file = __dirname + '/crontabs/env.db';
 
-crontab = function(name, command, schedule, stopped, logging, mailing){
-	var data = {};
+crontab = function(name, command, schedule, stopped, logging, mailing, line_id){
+	console.log(`${name} ${mailing}`)
+	let data = {};
 	data.name = name;
 	data.command = command;
 	data.schedule = schedule;
@@ -34,17 +36,35 @@ crontab = function(name, command, schedule, stopped, logging, mailing){
 	if (!mailing)
 		mailing = {};
 	data.mailing = mailing;
+	data.updated = true;
+	data.real_id = line_id;
 	return data;
 };
 
-exports.create_new = function(name, command, schedule, logging, mailing){
-	var tab = crontab(name, command, schedule, false, logging, mailing);
+// function Person(name, command, schedule, stopped, timestamp, logging, mailing,updated, real_id){
+// 	this.name = name;
+// 	this.command = command;
+// 	this.schedule = schedule;
+// 	this.stopped = stopped;
+// 	this.timestamp = timestamp;
+// 	this.logging = logging;
+// 	this.mailing = mailing;
+// 	this.updated = updated;
+// 	this.real_id = real_id;
+// }
+//
+// Person.prototype.getItems = function(callback) {
+// 	db.find({}, callback);
+// }
+
+exports.create_new = function(name, command, schedule, logging, mailing, line_id){
+	let tab = crontab(name, command, schedule, false, logging, mailing, line_id);
 	tab.created = new Date().valueOf();
 	db.insert(tab);
 };
 
 exports.update = function(data){
-	db.update({_id: data._id}, crontab(data.name, data.command, data.schedule, null, data.logging, data.mailing));
+	db.update({_id: data._id}, crontab(data.name, data.command, data.schedule, null, data.logging, data.mailing, data.real_id));
 };
 
 exports.status = function(_id, stopped){
@@ -76,7 +96,7 @@ exports.get_crontab = function(_id, callback) {
 
 exports.runjob = function(_id, callback) {
 	db.find({_id: _id}).exec(function(err, docs){
-		var res = docs[0];
+		let res = docs[0];
 		exec(res.command, function(error, stdout, stderr){
 			console.log(stdout);
 		});
@@ -92,37 +112,42 @@ exports.set_crontab = function(env_vars, callback){
 		}
 		tabs.forEach(function(tab){
 			if(!tab.stopped) {
-				let stderr = path.join(cronPath, tab._id + ".stderr");
-				let stdout = path.join(cronPath, tab._id + ".stdout");
-				let log_file = path.join(exports.log_folder, tab._id + ".log");
-				let log_file_stdout = path.join(exports.log_folder, tab._id + ".stdout.log");
+				if (tab.command.includes("3>&1 1>&2 2>&3")){
+					crontab_string += tab.schedule + " " + tab.command
+				} else {
+					let stderr = path.join(cronPath, tab._id + ".stderr");
+					let stdout = path.join(cronPath, tab._id + ".stdout");
+					let log_file = path.join(exports.log_folder, tab._id + ".log");
+					let log_file_stdout = path.join(exports.log_folder, tab._id + ".stdout.log");
 
-				if(tab.command[tab.command.length-1] != ";") // add semicolon
-					tab.command +=";";
+					if(tab.command[tab.command.length-1] != ";") // add semicolon
+						tab.command +=";";
 
-				crontab_string += tab.schedule + " ({ " + tab.command + " } | tee " + stdout + ") 3>&1 1>&2 2>&3 | tee " + stderr;
+					crontab_string += tab.schedule + " ({ " + tab.command + " } | tee " + stdout + ") 3>&1 1>&2 2>&3 | tee " + stderr;
 
-				if (tab.logging && tab.logging == "true") {
-					crontab_string += "; if test -f " + stderr +
-					"; then date >> \"" + log_file + "\"" +
-					"; cat " + stderr + " >> \"" + log_file + "\"" +
-					"; fi";
-					
-					crontab_string += "; if test -f " + stdout +
-					"; then date >> \"" + log_file_stdout + "\"" +
-					"; cat " + stdout + " >> \"" + log_file_stdout + "\"" +
-					"; fi";
+					if (tab.logging && tab.logging == "true") {
+						crontab_string += "; if test -f " + stderr +
+							"; then date >> \"" + log_file + "\"" +
+							"; cat " + stderr + " >> \"" + log_file + "\"" +
+							"; fi";
+
+						crontab_string += "; if test -f " + stdout +
+							"; then date >> \"" + log_file_stdout + "\"" +
+							"; cat " + stdout + " >> \"" + log_file_stdout + "\"" +
+							"; fi";
+					}
+
+					if (tab.hook) {
+						crontab_string += "; if test -f " + stdout +
+							"; then " + tab.hook + " < " + stdout +
+							"; fi";
+					}
+
+					if (tab.mailing && JSON.stringify(tab.mailing) != "{}"){
+						crontab_string += "; /usr/local/bin/node " + __dirname + "/bin/crontab-ui-mailer.js " + tab._id + " " + stdout + " " + stderr;
+					}
 				}
 
-				if (tab.hook) {
-					crontab_string += "; if test -f " + stdout +
-					"; then " + tab.hook + " < " + stdout +
-					"; fi";
-				}
-
-				if (tab.mailing && JSON.stringify(tab.mailing) != "{}"){
-					crontab_string += "; /usr/local/bin/node " + __dirname + "/bin/crontab-ui-mailer.js " + tab._id + " " + stdout + " " + stderr;
-				}
 
 				crontab_string += "\n";
 			}
@@ -179,9 +204,23 @@ exports.get_backup_names = function(){
 	return backups;
 };
 
+function replace_regexp_no_exception(string,charToBeReplaced, regexp, charToReplace) {
+    if (string.contains(charToBeReplaced)){
+        console.debug(string)
+        return string//.replace(regexp, charToReplace)
+    } else {
+        return string
+    }
+}
+
 exports.backup = function(){
 	//TODO check if it failed
-	fs.createReadStream( __dirname + '/crontabs/crontab.db').pipe(fs.createWriteStream( __dirname + '/crontabs/backup ' + (new Date()).toString().replace("+", " ").replace(" ", "_").replace(":", "-") + '.db'));
+	console.log(new Date().toString())
+    let dateAsString = new Date().toString()
+    let dateReplaced = replace_regexp_no_exception(dateAsString, "+",/+/g, " ")
+    dateReplaced = replace_regexp_no_exception(dateReplaced, " ",/ /g, "_")
+    dateReplaced = replace_regexp_no_exception(dateReplaced, ":",/:/g, "-")
+	fs.createReadStream( __dirname + '/crontabs/crontab.db').pipe(fs.createWriteStream( __dirname + '/crontabs/backup ' + dateReplaced + '.db'));
 };
 
 exports.restore = function(db_name){
@@ -190,7 +229,14 @@ exports.restore = function(db_name){
 };
 
 exports.reload_db = function(){
+	console.log("Reload!")
 	db.loadDatabase();
+	// db.remove({ updated: false }, { multi: true }, function (err, numRemoved) {
+	// 	if(err) {
+	// 		throw err;
+	// 	}
+	// 	console.info(`Removed ${numRemoved} stale items!`);
+	// });
 };
 
 exports.get_env = function(){
@@ -200,39 +246,133 @@ exports.get_env = function(){
 	return "";
 };
 
+
+
 exports.import_crontab = function(){
+	// Set an existing field's value
+	db.update({ updated: true }, { $set: { updated: false } }, { multi: true }, function (err, numReplaced) {
+		if(err) {
+			throw err;
+		}
+		console.info(`Updated to all items to update=false  , Number Replaced: ${numReplaced}!`);
+	});
+	db.loadDatabase();
+
 	exec("crontab -l", function(error, stdout, stderr){
-		var lines = stdout.split("\n");
-		var namePrefix = new Date().getTime();
+		// db.remove({}, { multi: true }, function (err, numRemoved) {
+		// });
+
+
+
+		let lines = stdout.split("\n");
+		let namePrefix = new Date().getTime();
 
 		lines.forEach(function(line, index){
+			let names = [];
 			line = line.replace(/\t+/g, ' ');
-			var regex = /^((\@[a-zA-Z]+\s+)|(([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+))/;
-			var command = line.replace(regex, '').trim();
-			var schedule = line.replace(command, '').trim();
+			let regex = /^((\@[a-zA-Z]+\s+)|(([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+))/;
+			let command = line.replace(regex, '').trim();
+			let schedule = line.replace(command, '').trim();
 
-			var is_valid = false;
+			const regex_id = /\/tmp\/([a-zA-Z0-9]+).std/gm;
+			let m;
+			let line_id='';
+			while ((m = regex_id.exec(line)) !== null) {
+				// This is necessary to avoid infinite loops with zero-width matches
+				if (m.index === regex.lastIndex) {
+					regex.lastIndex++;
+				}
+
+				// The result can be accessed through the `m`-variable.
+				m.forEach((match, groupIndex) => {
+					line_id = match;
+					console.log(`Index: ${index} - Found match, group ${groupIndex}: ${match}`);
+				});
+			}
+
+			let is_valid = false;
 			try { is_valid = cron_parser.parseString(line).expressions.length > 0; } catch (e){}
 
-			if(command && schedule && is_valid){
-				var name = namePrefix + '_' + index;
-
-				db.findOne({ command: command, schedule: schedule }, function(err, doc) {
+			if(command && schedule && is_valid && line_id){
+				let name = namePrefix + '_' + index;
+				console.log(`Index: ${index} - line_id: ${line_id}`);
+				db.findOne({ $or: [{ real_id: line_id }, { _id: line_id }]  }, function(err, doc) {
 					if(err) {
 						throw err;
 					}
+					console.log(`Index: ${index} - ${doc}`);
 					if(!doc){
-						exports.create_new(name, command, schedule, null);
+						names.push(name)
+						console.log(`Index: ${index} - Create New`);
+						exports.create_new(name, command, schedule, null, null,  line_id);
 					}
 					else{
+						names.push(doc.name)
+						console.log(`Index: ${index} - Update`);
 						doc.command = command;
-						doc.schedule = schedule;
+						doc.updated = true;
+						doc.real_id = line_id;
 						exports.update(doc);
 					}
 				});
+				// db.loadDatabase();
+
+				// db.remove({ updated: false }, { multi: true }, function (err, numRemoved) {
+				// 	if(err) {
+				// 		throw err;
+				// 	}
+				// 	console.info(`Removed ${numRemoved} stale items!`);
+				// });
+
+			} else {
+				console.info(`Index: ${index} - Error when updating from crontab!`);
 			}
+
+
+
 		});
+
+
+		// const record = new Person();
+		// record.getItems((err, docs) => {
+		// 	if(err) {
+		// 		throw err;
+		// 	}
+		// 	console.log(`Docs: ${docs}`);
+		// });
+
+		// db.find({}).sort({ created: -1 }).exec(function (err, docs) {
+		// 	if(err) {
+		// 		throw err;
+		// 	}
+		// 	console.log(`Docs1: ${docs}`);
+		// 	docs.forEach(function(doc, index){
+		// 		console.log(`Index: ${index} - ${doc}`);
+		// 		if(!doc){
+		// 			console.log(`Index: ${index} - Create New`);
+		// 		}
+		// 		else{
+		// 			// names.push(doc.name)
+		// 			console.log(`Index: ${index} - Update`);
+		// 			// doc.command = command;
+		// 			// doc.updated = true;
+		// 			// exports.update(doc);
+		// 		}
+		// 	});
+		// });
 	});
+};
+
+exports.remove_stale = function(callback) {
+	console.info(`Removed stale items!`);
+	// db.loadDatabase();
+	//
+	// db.remove({ updated: false }, { multi: true }, function (err, numRemoved) {
+	// 	if(err) {
+	// 		throw err;
+	// 	}
+	// 	console.info(`Removed ${numRemoved} stale items!`);
+	// });
 };
 
 exports.autosave_crontab = function(callback) {

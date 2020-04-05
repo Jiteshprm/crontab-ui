@@ -198,6 +198,12 @@ app.get(routes.logger, function(req, res) {
 });
 
 // get the log file a given job. id passed as query param
+app.get(routes.remove_stale, function(req, res) {
+	crontab.remove_stale();
+	res.end();
+});
+
+// get the log file a given job. id passed as query param
 app.get(routes.stdout, function(req, res) {
 	let _file = crontab.log_folder + "/" + req.query.id + ".stdout.log";
 	sendLog(_file, req, res);
