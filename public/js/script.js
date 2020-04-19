@@ -77,13 +77,11 @@ function setCrontab(){
 
 function getCrontab(){
 	messageBox("<p> Do you want to get the crontab file? <br /> <b style='color:red'>NOTE: It is recommended to take a backup before this.</b> And refresh the page after this.</p>", "Confirm crontab retrieval", null, null, function(){
-		$.get(routes.import_crontab, { "env_vars": $("#env_vars").val() }, function(){
+		$.get(routes.import_crontab, { "env_vars": $("#env_vars").val() }, function(text){
 			// TODO show only if success
-			// $.get(routes.remove_stale, {}, function(){
-				infoMessageBox("Successfuly got the crontab file!","Information");
-				// location.reload();
-			// });
 
+			// location.reload();
+			infoMessageBox(text,"Information");
 		});
 	});
 }

@@ -178,10 +178,24 @@ app.post(routes.import, function(req, res) {
 	});
 });
 
+const waitFor = (ms) => new Promise(r => setTimeout(r, ms));
+const import_crontab_wait = () => new Promise( async (resolve,reject) => await crontab.import_crontab(resolve,reject).catch(error => reject(error)));
 // import from current ACTUALL crontab
-app.get(routes.import_crontab, function(req, res) {
-	crontab.import_crontab();
-	res.end();
+app.get(routes.import_crontab, async function(req, res) {
+	console.info(`Start import_crontab!`)
+
+
+	await import_crontab_wait()
+		.then(async (successMessage) => {
+		// successMessage is whatever we passed in the resolve(...) function above.
+		// It doesn't have to be a string, but if it is only a succeed message, it probably will be.
+		console.log("Yay! " + successMessage)
+			console.info(`Finish import_crontab!`)
+			console.info(`Res end!`)
+			res.send(successMessage);
+		}).catch(error => res.send("Error:" + error));
+
+
 });
 
 function sendLog(path, req, res) {
