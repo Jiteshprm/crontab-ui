@@ -192,6 +192,7 @@ exports.write_crontab = function (env_vars) {
                 crontab_string = env_vars + "\n";
             }
             crontab_string += add_all_error_handlers_list.join("\n");
+            crontab_string += "\n";
             console.info(`crontab_string: ${crontab_string}`);
 
             var fileName = "crontab";
