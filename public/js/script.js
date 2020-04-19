@@ -6,6 +6,13 @@ function infoMessageBox(message, title){
 	$("#info-title").html(title);
 	$("#info-popup").modal('show');
 }
+function infoMessageBox(message, title,callback){
+	$("#info-body").html(message);
+	$("#info-title").html(title);
+	$("#info-popup").modal('show');
+	$("#info-button").unbind("click"); // remove existing events attached to this
+	$("#info-button").click(callback);
+}
 // like info, but for errors.
 function errorMessageBox(message) {
 	var msg =
@@ -66,9 +73,11 @@ function runJob(_id){
 
 function setCrontab(){
 	messageBox("<p> Do you want to set the crontab file? </p>", "Confirm crontab setup", null, null, function(){
-		$.get(routes.crontab, { "env_vars": $("#env_vars").val() }, function(){
+		$.get(routes.crontab, { "env_vars": $("#env_vars").val() }, function(text){
 			// TODO show only if success
-			infoMessageBox("Successfuly set crontab file!","Information");
+			infoMessageBox(text,"Information", function (){
+				location.reload();
+			});
 		}).fail(function(response) {
 			errorMessageBox(response.statusText,"Error");
 		});
@@ -78,10 +87,11 @@ function setCrontab(){
 function getCrontab(){
 	messageBox("<p> Do you want to get the crontab file? <br /> <b style='color:red'>NOTE: It is recommended to take a backup before this.</b> And refresh the page after this.</p>", "Confirm crontab retrieval", null, null, function(){
 		$.get(routes.import_crontab, { "env_vars": $("#env_vars").val() }, function(text){
-			// TODO show only if success
-
-			// location.reload();
-			infoMessageBox(text,"Information");
+			infoMessageBox(text,"Information", function (){
+				location.reload();
+			});
+		}).fail(function(response) {
+			errorMessageBox(response.statusText,"Error");
 		});
 	});
 }

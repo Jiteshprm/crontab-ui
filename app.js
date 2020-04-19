@@ -112,11 +112,16 @@ app.post(routes.run, function(req, res) {
 });
 
 // set crontab. Needs env_vars to be passed
-app.get(routes.crontab, function(req, res, next) {
-	crontab.set_crontab(req.query.env_vars, function(err) {
-		if (err) next(err);
-		else res.end();
-	});
+app.get(routes.crontab, async function(req, res, next) {
+	try {
+		console.info(`Start write_crontab!`);
+		const result = await crontab.write_crontab(req.query.env_vars);
+		console.log("Finished OK: " + result);
+		res.end("Finished OK: " + result);
+	} catch (err) {
+		console.log("Error: " + err);
+		res.end("Error: " + err.toString());
+	}
 });
 
 // backup crontab db
@@ -178,24 +183,17 @@ app.post(routes.import, function(req, res) {
 	});
 });
 
-const waitFor = (ms) => new Promise(r => setTimeout(r, ms));
-const import_crontab_wait = () => new Promise( async (resolve,reject) => await crontab.import_crontab(resolve,reject).catch(error => reject(error)));
 // import from current ACTUALL crontab
 app.get(routes.import_crontab, async function(req, res) {
-	console.info(`Start import_crontab!`)
-
-
-	await import_crontab_wait()
-		.then(async (successMessage) => {
-		// successMessage is whatever we passed in the resolve(...) function above.
-		// It doesn't have to be a string, but if it is only a succeed message, it probably will be.
-		console.log("Yay! " + successMessage)
-			console.info(`Finish import_crontab!`)
-			console.info(`Res end!`)
-			res.send(successMessage);
-		}).catch(error => res.send("Error:" + error));
-
-
+	try {
+		console.info(`Start import_crontab!`);
+		const result = await crontab.import_crontab();
+		console.log("Finished OK: " + result);
+		res.end("Finished OK: " + result);
+	} catch (err) {
+		console.log("Error: " + err);
+		res.end("Error: " + err.toString());
+	}
 });
 
 function sendLog(path, req, res) {

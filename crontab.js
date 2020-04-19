@@ -2,26 +2,20 @@
 //load database
 // var Datastore = require('nedb-async');
 const {AsyncNedb} = require('nedb-async');
-var path = require("path");
+const path = require("path");
 const db = new AsyncNedb({filename: __dirname + '/crontabs/crontab.db'});
+const exec = require('child_process').exec;
+const fs = require('fs');
+const cron_parser = require("cron-parser");
+
 var cronPath = "/tmp";
+exports.log_folder = __dirname + '/crontabs/logs';
+exports.env_file = __dirname + '/crontabs/env.db';
 
 if (process.env.CRON_PATH !== undefined) {
     console.log(`Path to crond files set using env variables ${process.env.CRON_PATH}`);
     cronPath = process.env.CRON_PATH;
 }
-
-db.asyncLoadDatabase(function (err) {
-    console.log("Loading DB...")
-    if (err) throw err; // no hope, just terminate
-});
-
-var exec = require('child_process').exec;
-var fs = require('fs');
-var cron_parser = require("cron-parser");
-
-exports.log_folder = __dirname + '/crontabs/logs';
-exports.env_file = __dirname + '/crontabs/env.db';
 
 crontab = function (name, command, schedule, stopped, logging, mailing, line_id) {
     console.log(`${name} ${mailing}`)
@@ -44,29 +38,48 @@ crontab = function (name, command, schedule, stopped, logging, mailing, line_id)
 
 exports.create_new = function (name, command, schedule, logging, mailing, line_id) { // sample async action
     return new Promise(async (resolve, reject) => {
-        let tab = crontab(name, command, schedule, false, logging, mailing, line_id);
-        tab.created = new Date().valueOf();
-        await db.asyncInsert(tab);
-        resolve ("OK")
+        try {
+            let tab = crontab(name, command, schedule, false, logging, mailing, line_id);
+            tab.created = new Date().valueOf();
+            await db.asyncInsert(tab);
+            resolve ("OK");
+        } catch (err) {
+            reject (err);
+        }
     });
 };
 
-// exports.create_new = async function(name, command, schedule, logging, mailing, line_id){
-// 	let tab = crontab(name, command, schedule, false, logging, mailing, line_id);
-// 	tab.created = new Date().valueOf();
-// 	await db.asyncInsert(tab);
-// };
-
-exports.update = async function (data) {
-    await db.asyncUpdate({_id: data._id}, crontab(data.name, data.command, data.schedule, null, data.logging, data.mailing, data.real_id));
+exports.update = function (data) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const res=await db.asyncUpdate({_id: data._id}, crontab(data.name, data.command, data.schedule, null, data.logging, data.mailing, data.real_id));
+            resolve (res);
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
-exports.status = async function (_id, stopped) {
-    await db.asyncUpdate({_id: _id}, {$set: {stopped: stopped}});
+exports.status = function (_id, stopped) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const res=await db.asyncUpdate({_id: _id}, {$set: {stopped: stopped}});
+            resolve (res);
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
 exports.remove = async function (_id) {
-    await db.asyncRemove({_id: _id}, {});
+    return new Promise(async (resolve, reject) => {
+        try {
+            const res=await db.asyncRemove({_id: _id}, {});
+            resolve (res);
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
 // Iterates through all the crontab entries in the db and calls the callback with the entries
@@ -100,14 +113,10 @@ exports.runjob = async function (_id, callback) {
     });
 };
 
-// Set actual crontab file from the db
-exports.set_crontab = async function (env_vars, callback) {
-    exports.crontabs(async function (tabs) {
-        var crontab_string = "";
-        if (env_vars) {
-            crontab_string = env_vars + "\n";
-        }
-        await asyncForEach(tabs, function (tab) {
+const add_one_entry_error_handlers = function (tab) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            var crontab_string = "";
             if (!tab.stopped) {
                 if (tab.command.includes("3>&1 1>&2 2>&3")) {
                     crontab_string += tab.schedule + " " + tab.command
@@ -144,36 +153,61 @@ exports.set_crontab = async function (env_vars, callback) {
                         crontab_string += "; /usr/local/bin/node " + __dirname + "/bin/crontab-ui-mailer.js " + tab._id + " " + stdout + " " + stderr;
                     }
                 }
-
-
-                crontab_string += "\n";
             }
-        });
-
-        await fs.writeFile(exports.env_file, env_vars, async function (err) {
-            if (err) callback(err);
-        });
-
-        var fileName = "crontab"
-        // In docker we're running as the root user, so we need to write the file as root and not crontab
-        if (process.env.CRON_IN_DOCKER !== undefined) {
-            fileName = "root"
+            resolve (crontab_string);
+        } catch (err) {
+            reject (err);
         }
-        await fs.writeFile(path.join(cronPath, fileName), crontab_string, async function (err) {
-            if (err) return callback(err);
-            /// In docker we're running crond using busybox implementation of crond
-            /// It is launched as part of the container startup process, so no need to run it again
-            if (process.env.CRON_IN_DOCKER === undefined) {
-                await exec("crontab " + path.join(cronPath, "crontab"), async function (err) {
-                    if (err) return callback(err);
-                    else callback();
-                });
-            } else {
-                callback();
-            }
+    });
+};
+
+function writeFileAsync(file_path, file_content) {
+    return new Promise(function(resolve, reject) {
+        fs.writeFile(file_path, file_content, function (err) {
+            if (err) reject(err);
+            else resolve("OK");
         });
     });
+};
 
+
+exports.write_crontab = function (env_vars) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const docs = await db.asyncFind({}, [['sort', {created: -1}]]);
+            for (let i = 0; i < docs.length; i++) {
+                if (docs[i].schedule == "@reboot")
+                    docs[i].next = "Next Reboot";
+                else
+                    docs[i].next = cron_parser.parseExpression(docs[i].schedule).next().toString();
+            }
+            console.info(docs);
+            const add_all_error_handlers = docs.map(add_one_entry_error_handlers);
+            const add_all_error_handlers_list = await Promise.all(add_all_error_handlers);
+            console.info(`add_all_error_handlers_list: ${add_all_error_handlers_list}`);
+
+            console.info(`env_vars: ${env_vars}`);
+            var crontab_string = "";
+            if (env_vars) {
+                crontab_string = env_vars + "\n";
+            }
+            crontab_string += add_all_error_handlers_list.join("\n");
+            console.info(`crontab_string: ${crontab_string}`);
+
+            var fileName = "crontab";
+            // In docker we're running as the root user, so we need to write the file as root and not crontab
+            if (process.env.CRON_IN_DOCKER !== undefined) {
+                fileName = "root";
+            }
+
+            await writeFileAsync(exports.env_file, env_vars);
+            await writeFileAsync(path.join(cronPath, fileName), crontab_string);
+            await execShellCommand("crontab " + path.join(cronPath, fileName));
+            resolve("Successfully wrote to crontab")
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
 exports.get_backup_names = function () {
@@ -251,35 +285,7 @@ async function asyncForEach(array, callback) {
     }
 }
 
-function findOne(db, opt) {
-    return new Promise(function (resolve, reject) {
-        db.findOne(opt, function (err, doc) {
-            if (err) {
-                reject(err)
-            } else {
-                resolve(doc)
-            }
-        })
-    })
-}
-
 const waitFor = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function update_record(index, doc, command, line_id) {
-    console.log(`Index: ${index} - ${doc}`);
-    if (!doc) {
-        console.log(`Index: ${index} - Create New`);
-        await exports.create_new(name, command, schedule, null, null, line_id);
-        return [1, 0];
-    } else {
-        console.log(`Index: ${index} - Update`);
-        doc.command = command;
-        doc.updated = true;
-        doc.real_id = line_id;
-        await exports.update(doc);
-        return [0, 1];
-    }
-}
 
 /**
  * https://medium.com/@ali.dev/how-to-use-promise-with-exec-in-node-js-a39c4d7bbf77
@@ -300,127 +306,131 @@ function execShellCommand(cmd) {
     });
 }
 
-var convert_line_to_id = function (line) { // sample async action
+const convert_line_to_id = function (line) { // sample async action
     return new Promise((resolve, reject) => {
-        line = line.replace(/\t+/g, ' ');
-        let regex = /^((\@[a-zA-Z]+\s+)|(([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+))/;
-        let command = line.replace(regex, '').trim();
-        let schedule = line.replace(command, '').trim();
+        try {
+            line = line.replace(/\t+/g, ' ');
+            let regex = /^((\@[a-zA-Z]+\s+)|(([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+))/;
+            let command = line.replace(regex, '').trim();
+            let schedule = line.replace(command, '').trim();
 
-        const regex_id = /\/tmp\/([a-zA-Z0-9]+).std/gm;
-        let m;
-        let line_id = '';
+            const regex_id = /\/tmp\/([a-zA-Z0-9]+).std/gm;
+            let m;
+            let line_id = '';
 
-        while ((m = regex_id.exec(line)) !== null) {
-            // This is necessary to avoid infinite loops with zero-width matches
-            if (m.index === regex.lastIndex) {
-                regex.lastIndex++;
+            while ((m = regex_id.exec(line)) !== null) {
+                // This is necessary to avoid infinite loops with zero-width matches
+                if (m.index === regex.lastIndex) {
+                    regex.lastIndex++;
+                }
+
+                // The result can be accessed through the `m`-variable.
+                m.forEach((match, groupIndex) => {
+                    line_id = match;
+                    console.log(`Line: ${line} - Found match, group ${groupIndex}: ${match}`);
+                });
             }
 
-            // The result can be accessed through the `m`-variable.
-            m.forEach((match, groupIndex) => {
-                line_id = match;
-                console.log(`Line: ${line} - Found match, group ${groupIndex}: ${match}`);
-            });
-        }
-
-        resolve([line_id, line, command, schedule]);
-    });
-};
-
-
-var check_if_record_exists = function ([line_id, line, command, schedule]) { // sample async action
-    return new Promise(async (resolve, reject) => {
-        if (line.length > 0) {
-            await db.asyncFindOne({$or: [{real_id: line_id}, {_id: line_id}]})
-                .then(element => resolve([line_id, line, command, schedule, true, element]))
-                .catch(error => reject(error));
-        } else {
-            resolve([line_id, line, command, schedule, false, false]);
+            resolve([line_id, line, command, schedule]);
+        } catch (err) {
+            reject (err);
         }
     });
 };
 
 
-var update_or_add_element = function ([line_id, line, command, schedule, is_valid, element]) { // sample async action
+const check_if_record_exists = function ([line_id, line, command, schedule]) { // sample async action
     return new Promise(async (resolve, reject) => {
-        if (is_valid) {
-            if (!element) {
-                console.log(`line_id: ${line_id} - Create New`);
-                name = new Date().getTime();
-                await exports.create_new(name, command, schedule, null, null, line_id).catch(error => reject(error));
-                resolve([1, 0]);
+        try {
+            if (line.length > 0) {
+                const element = await db.asyncFindOne({$or: [{real_id: line_id}, {_id: line_id}]})
+                resolve([line_id, line, command, schedule, true, element]);
             } else {
-                console.log(`line_id: ${line_id} - Update`);
-                element.command = command;
-                element.updated = true;
-                element.real_id = line_id;
-                await exports.update(element).catch(error => reject(error));
-                resolve([0, 1]);
+                resolve([line_id, line, command, schedule, false, false]);
             }
-        } else {
-            resolve([0, 0]);
+        } catch (err) {
+            reject (err);
+        }
+    });
+};
+
+
+const update_or_add_element = function ([line_id, line, command, schedule, is_valid, element]) { // sample async action
+    return new Promise(async (resolve, reject) => {
+        try {
+            if (is_valid) {
+                if (!element) {
+                    console.log(`line_id: ${line_id} - Create New`);
+                    const name = new Date().getTime();
+                    await exports.create_new(name, command, schedule, null, null, line_id);
+                    resolve([1, 0]);
+                } else {
+                    console.log(`line_id: ${line_id} - Update`);
+                    element.command = command;
+                    element.updated = true;
+                    element.real_id = line_id;
+                    await exports.update(element);
+                    resolve([0, 1]);
+                }
+            } else {
+                resolve([0, 0]);
+            }
+        } catch (err) {
+            reject (err);
         }
     });
 };
 
 function execute_crontab_entries_update() {
     return new Promise(async (resolve, reject) => {
-        await execShellCommand('crontab -l')
-            .then(async all_cron_lines => {
-                var all_cron_lines_array = all_cron_lines.split("\n");
-                var cron_ids = all_cron_lines_array.map(convert_line_to_id);
-                await Promise.all(cron_ids)
-                    .then(async all_cron_ids_list => {
-                        console.info(`all_cron_ids_list: ${all_cron_ids_list}`);
-                        var check_if_all_record_exists = all_cron_ids_list.map(check_if_record_exists); // run the function over all items
-                        await Promise.all(check_if_all_record_exists)
-                            .then(async records_exist => {
-                                console.info(`records_exist: ${records_exist}`);
-                                var update_or_add_all_elements = records_exist.map(update_or_add_element); // run the function over all items
-                                await Promise.all(update_or_add_all_elements)
-                                    .then(async records_update_add => {
-                                        console.info(`records_update_add: ${records_update_add}`);
-                                        var count_agg_func = function (a, b) { // sample async action
-                                            return ([a[0] + b[0], a[1] + b[1]]);
-                                        };
-                                        var count_agg_all = records_update_add.reduce(count_agg_func); // run the function over all items
-                                        console.info(`count_updated_result: ${count_agg_all}`);
-                                        resolve(`Added: ${count_agg_all[0]}, Updated: ${count_agg_all[1]}`);
-                                    });
-                            });
-                    });
-            })
-            .catch(error => reject(error));
+        try{
+            const all_cron_lines = await execShellCommand('crontab -l')
+            const all_cron_lines_array = all_cron_lines.split("\n");
+
+            const cron_ids = all_cron_lines_array.map(convert_line_to_id);
+            const all_cron_ids_list = await Promise.all(cron_ids);
+            console.info(`all_cron_ids_list: ${all_cron_ids_list}`);
+
+            const check_if_all_record_exists = all_cron_ids_list.map(check_if_record_exists); // run the function over all items
+            const records_exist = await Promise.all(check_if_all_record_exists);
+            console.info(`records_exist: ${records_exist}`);
+
+            const update_or_add_all_elements = records_exist.map(update_or_add_element); // run the function over all items
+            const records_update_add = await Promise.all(update_or_add_all_elements);
+            console.info(`records_update_add: ${records_update_add}`);
+
+            const count_agg_func = function (a, b) { // sample async action
+                return ([a[0] + b[0], a[1] + b[1]]);
+            };
+            const count_agg_all = records_update_add.reduce(count_agg_func); // run the function over all items
+            console.info(`count_updated_result: ${count_agg_all}`);
+            resolve(`Added: ${count_agg_all[0]}, Updated: ${count_agg_all[1]}`);
+        } catch (err) {
+            reject (err);
+        }
+
     });
 }
 
-exports.import_crontab = async function (resolve, reject) {
-    let successMessage = "";
-    await db.asyncUpdate({updated: true}, {$set: {updated: false}}, {multi: true})
-        .then(async numReplaced => {
+exports.import_crontab = function () {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const numReplaced = await db.asyncUpdate({updated: true}, {$set: {updated: false}}, {multi: true});
             console.info(`Updated to all items to update=false  , Number Replaced: ${numReplaced}!`);
-            await db.asyncLoadDatabase()
-                .then(async x => {
-                    await execute_crontab_entries_update(resolve, reject)
-                        .then(async successMessage => {
-                            console.info("Update Finished!");
-                            console.info("Deleting not updated records...");
-                            await db.asyncLoadDatabase()
-                                .then(async x => {
-                                    await db.asyncRemove({updated: false}, {multi: true})
-                                    // let numRemoved =0
-                                    // await waitFor(500)
-                                        .then(async numRemoved => {
-                                            console.info("All Finished!");
-                                            const msg = `All Finished - ${successMessage}, Deleted: ${numRemoved}`;
-                                            console.info(msg);
-                                            resolve(msg)
-                                        });
-                                });
-                        });
-                });
-        });
+            await db.asyncLoadDatabase();
+            const successMessage = await execute_crontab_entries_update(resolve, reject);
+            console.info("Update Finished!");
+            console.info("Deleting not updated records...");
+            await db.asyncLoadDatabase();
+            const numRemoved=await db.asyncRemove({updated: false}, {multi: true});
+            console.info("All Finished!");
+            const msg = `${successMessage}, Deleted: ${numRemoved}`;
+            console.info(msg);
+            resolve(msg)
+        } catch (err) {
+            reject(err)
+        }
+    });
 };
 
 
