@@ -265,12 +265,6 @@ exports.restore = function (db_name) {
 exports.reload_db = function () {
     console.log("Reload!")
     db.asyncLoadDatabase();
-    // db.remove({ updated: false }, { multi: true }, function (err, numRemoved) {
-    // 	if(err) {
-    // 		throw err;
-    // 	}
-    // 	console.info(`Removed ${numRemoved} stale items!`);
-    // });
 };
 
 exports.get_env = function () {
@@ -279,14 +273,6 @@ exports.get_env = function () {
     }
     return "";
 };
-
-async function asyncForEach(array, callback) {
-    for (let index = 0; index < array.length; index++) {
-        await callback(array[index], index, array);
-    }
-}
-
-const waitFor = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
  * https://medium.com/@ali.dev/how-to-use-promise-with-exec-in-node-js-a39c4d7bbf77
@@ -370,6 +356,7 @@ const update_or_add_element = function ([line_id, line, command, schedule, is_va
                     element.command = command;
                     element.updated = true;
                     element.real_id = line_id;
+                    element.schedule = schedule;
                     await exports.update(element);
                     resolve([0, 1]);
                 }
@@ -435,19 +422,7 @@ exports.import_crontab = function () {
 };
 
 
-exports.remove_stale = function (callback) {
-    console.info(`Removed stale items!`);
-    // db.loadDatabase();
-    //
-    // db.remove({ updated: false }, { multi: true }, function (err, numRemoved) {
-    // 	if(err) {
-    // 		throw err;
-    // 	}
-    // 	console.info(`Removed ${numRemoved} stale items!`);
-    // });
-};
-
 exports.autosave_crontab = function (callback) {
     let env_vars = exports.get_env();
-    exports.set_crontab(env_vars, callback);
+    exports.write_crontab(env_vars);
 };
