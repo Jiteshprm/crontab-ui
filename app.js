@@ -84,12 +84,12 @@ app.post(routes.save, async function(req, res) {
     try {
         // new job
         if(req.body._id == -1){
-            console.log("Create New: " + req.body.toJSON() );
+            console.log('Create New:  %O', req.body );
             await crontab.create_new(req.body.name, req.body.command, req.body.schedule, req.body.logging, req.body.mailing);
         }
         // edit job
         else{
-            console.log("Update: " + req.body.toJSON() );
+            console.log('Update:  %O', req.body );
             await crontab.update(req.body);
         }
         res.end("OK");
