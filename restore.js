@@ -1,18 +1,23 @@
 //load database
-var Datastore = require('nedb');
-
-var exec = require('child_process').exec;
+const {AsyncNedb} = require('nedb-async');
+const {promisify} = require('util');
 var fs = require('fs');
 
-exports.crontabs = function(db_name, callback){
-	var db = new Datastore({ filename: __dirname + '/crontabs/' + db_name });
-	db.loadDatabase(function (err) {
-	});
-	db.find({}).sort({ created: -1 }).exec(function(err, docs){
-		callback(docs);
+const unlink = promisify(fs.unlink);
+
+exports.crontabs = function(db_name){
+	return new Promise(async (resolve, reject) => {
+		try{
+			const db = new AsyncNedb({filename: __dirname + '/crontabs/' + db_name});
+			await db.asyncLoadDatabase();
+			const docs=await db.asyncFind({}, [['sort', {created: -1}]]);
+			resolve (docs);
+		} catch (err) {
+			reject (err);
+		}
 	});
 };
 
-exports.delete = function(db_name){
-	fs.unlink(__dirname + '/crontabs/' + db_name);
+exports.delete = async function(db_name){
+	await unlink(__dirname + '/crontabs/' + db_name);
 };

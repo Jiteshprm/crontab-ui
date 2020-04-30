@@ -1,16 +1,21 @@
 /*jshint esversion: 6*/
 //load database
-// var Datastore = require('nedb-async');
+
 const {AsyncNedb} = require('nedb-async');
 const path = require("path");
 const db = new AsyncNedb({filename: __dirname + '/crontabs/crontab.db'});
 const exec = require('child_process').exec;
 const fs = require('fs');
 const cron_parser = require("cron-parser");
+const {promisify} = require('util');
 
 var cronPath = "/tmp";
 exports.log_folder = __dirname + '/crontabs/logs';
 exports.env_file = __dirname + '/crontabs/env.db';
+
+const readFilePromise = promisify(fs.readFile);
+const readdirPromise = promisify(fs.readdir);
+
 
 if (process.env.CRON_PATH !== undefined) {
     console.log(`Path to crond files set using env variables ${process.env.CRON_PATH}`);
@@ -83,18 +88,21 @@ exports.remove = async function (_id) {
 };
 
 // Iterates through all the crontab entries in the db and calls the callback with the entries
-exports.crontabs = async function (callback) {
-    await db.asyncFind({}, [['sort', {created: -1}]]).then(async function (docs) {
-        console.info(docs)
-        for (var i = 0; i < docs.length; i++) {
-            if (docs[i].schedule == "@reboot")
-                docs[i].next = "Next Reboot";
-            else
-                docs[i].next = cron_parser.parseExpression(docs[i].schedule).next().toString();
+exports.crontabs = function () {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const docs=await db.asyncFind({}, [['sort', {created: -1}]]);
+            console.info(docs)
+            for (var i = 0; i < docs.length; i++) {
+                if (docs[i].schedule == "@reboot")
+                    docs[i].next = "Next Reboot";
+                else
+                    docs[i].next = cron_parser.parseExpression(docs[i].schedule).next().toString();
+            }
+            resolve (docs);
+        } catch (err) {
+            reject (err);
         }
-        callback(docs);
-    }, function (error) {
-        console.error(error);
     });
 };
 
@@ -211,14 +219,13 @@ exports.write_crontab = function (env_vars) {
     });
 };
 
-exports.get_backup_names = function () {
+//http://stevehanov.ca/blog/?id=127
+exports.get_backup_names = async function () {
     var backups = [];
-    fs.readdirSync(__dirname + '/crontabs').forEach(function (file) {
-        // file name begins with backup
-        if (file.indexOf("backup") === 0) {
-            backups.push(file);
-        }
-    });
+    let p = await readdirPromise( __dirname + '/crontabs' );
+    console.log( p);
+    p.map(a => {if (a.includes("backup")) { backups.push(a) }});
+    console.log( backups);
 
     // Sort by date. Newest on top
     for (var i = 0; i < backups.length; i++) {
@@ -239,37 +246,89 @@ exports.get_backup_names = function () {
 };
 
 function replace_regexp_no_exception(string, charToBeReplaced, regexp, charToReplace) {
-    if (string.contains(charToBeReplaced)) {
-        console.debug(string)
-        return string//.replace(regexp, charToReplace)
+    if (string.indexOf(charToBeReplaced)<0) {
+        return string;
     } else {
-        return string
+        console.debug(string)
+        return string.replace(regexp, charToReplace);
     }
 }
+/**
+ * https://stackoverflow.com/questions/44013020/using-promises-with-streams-in-node-js
+ *
+ * Streams input to output and resolves only after stream has successfully ended.
+ * Closes the output stream in success and error cases.
+ * @param input {stream.Readable} Read from
+ * @param output {stream.Writable} Write to
+ * @return Promise Resolves only after the output stream is "end"ed or "finish"ed.
+ */
+function promisifiedPipe(input, output) {
+    let ended = false;
+    function end() {
+        if (!ended) {
+            ended = true;
+            output.close && output.close();
+            input.close && input.close();
+            return true;
+        }
+    }
 
+    return new Promise((resolve, reject) => {
+        input.pipe(output);
+        input.on('error', errorEnding);
+
+        function niceEnding() {
+            if (end()) resolve();
+        }
+
+        function errorEnding(error) {
+            if (end()) reject(error);
+        }
+
+        output.on('finish', niceEnding);
+        output.on('end', niceEnding);
+        output.on('error', errorEnding);
+    });
+};
 exports.backup = function () {
-    //TODO check if it failed
-    console.log(new Date().toString())
-    let dateAsString = new Date().toString()
-    let dateReplaced = replace_regexp_no_exception(dateAsString, "+", /+/g, " ")
-    dateReplaced = replace_regexp_no_exception(dateReplaced, " ", / /g, "_")
-    dateReplaced = replace_regexp_no_exception(dateReplaced, ":", /:/g, "-")
-    fs.createReadStream(__dirname + '/crontabs/crontab.db').pipe(fs.createWriteStream(__dirname + '/crontabs/backup ' + dateReplaced + '.db'));
+    return new Promise(async (resolve, reject) => {
+        try{
+            console.log(new Date().toString());
+            let dateAsString = new Date().toString();
+            let dateReplaced = replace_regexp_no_exception(dateAsString, "+", /\+/g, " ");
+            dateReplaced = replace_regexp_no_exception(dateReplaced, " ", / /g, "_");
+            dateReplaced = replace_regexp_no_exception(dateReplaced, ":", /:/g, "-");
+            await promisifiedPipe(fs.createReadStream(__dirname + '/crontabs/crontab.db'), fs.createWriteStream(__dirname + '/crontabs/backup_' + dateReplaced + '.db'))
+            resolve("Successfully wrote to crontab");
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
-exports.restore = function (db_name) {
-    fs.createReadStream(__dirname + '/crontabs/' + db_name).pipe(fs.createWriteStream(__dirname + '/crontabs/crontab.db'));
-    db.asyncLoadDatabase(); // reload the database
+exports.restore = async function (db_name) {
+    return new Promise(async (resolve, reject) => {
+        try{
+            await promisifiedPipe( fs.createReadStream(__dirname + '/crontabs/' + db_name), fs.createWriteStream(__dirname + '/crontabs/crontab.db'));
+            await db.asyncLoadDatabase(); // reload the database
+            resolve("Successfully wrote to crontab");
+        } catch (err) {
+            reject (err);
+        }
+    });
 };
 
 exports.reload_db = function () {
-    console.log("Reload!")
-    db.asyncLoadDatabase();
+    return new Promise(async (resolve, reject) => {
+        console.log("Reload!")
+        await db.asyncLoadDatabase();
+        resolve("Reload!")
+    });
 };
 
-exports.get_env = function () {
-    if (fs.existsSync(exports.env_file)) {
-        return fs.readFileSync(exports.env_file, 'utf8').replace("\n", "\n");
+exports.get_env = async function () {
+    if (await fs.promises.access(exports.env_file)) {
+        return readFilePromise(exports.env_file, 'utf8').replace("\n", "\n");
     }
     return "";
 };
@@ -422,7 +481,7 @@ exports.import_crontab = function () {
 };
 
 
-exports.autosave_crontab = function (callback) {
+exports.autosave_crontab = async function (callback) {
     let env_vars = exports.get_env();
-    exports.write_crontab(env_vars);
+    await exports.write_crontab(env_vars);
 };
