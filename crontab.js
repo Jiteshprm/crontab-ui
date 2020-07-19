@@ -209,7 +209,9 @@ exports.write_crontab = function (env_vars) {
                 fileName = "root";
             }
 
-            await writeFileAsync(exports.env_file, env_vars);
+            if (env_vars) {
+                await writeFileAsync(exports.env_file, env_vars);
+            }
             await writeFileAsync(path.join(cronPath, fileName), crontab_string);
             await execShellCommand("crontab " + path.join(cronPath, fileName));
             resolve("Successfully wrote to crontab")
