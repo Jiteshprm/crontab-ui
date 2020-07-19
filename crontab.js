@@ -4,7 +4,6 @@
 const {AsyncNedb} = require('nedb-async');
 const path = require("path");
 const db = new AsyncNedb({filename: __dirname + '/crontabs/crontab.db'});
-const env_db = new AsyncNedb({filename: __dirname + '/crontabs/env.db'});
 const exec = require('child_process').exec;
 const fs = require('fs');
 const cron_parser = require("cron-parser");
@@ -330,7 +329,7 @@ exports.reload_db = function () {
 };
 
 exports.get_env = async function () {
-    if (await fs.promises.access(exports.env_file)) {
+    if (await fs.promises.access(exports.env_file, fs.constants.F_OK)) {
         return readFilePromise(exports.env_file, 'utf8').replace("\n", "\n");
     }
     return "";
