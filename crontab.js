@@ -4,6 +4,7 @@
 const {AsyncNedb} = require('nedb-async');
 const path = require("path");
 const db = new AsyncNedb({filename: __dirname + '/crontabs/crontab.db'});
+const env_db = new AsyncNedb({filename: __dirname + '/crontabs/env.db'});
 const exec = require('child_process').exec;
 const fs = require('fs');
 const cron_parser = require("cron-parser");
