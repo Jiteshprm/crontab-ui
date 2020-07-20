@@ -330,7 +330,7 @@ exports.reload_db = function () {
 
 exports.get_env = async function () {
     console.log("get_env1!")
-    if (await fs.promises.access(exports.env_file, fs.constants.F_OK)) {
+    if (await fs.promises.existsSync(exports.env_file)) {
         console.log("get_env2!")
         return readFilePromise(exports.env_file, 'utf8').replace("\n", "\n");
         console.log("get_env3!")
